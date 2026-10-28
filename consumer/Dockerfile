@@ -1,5 +1,5 @@
 # 1. Image de base minimale Chainguard, figée par digest (jamais un tag seul)
-FROM cgr.dev/chainguard/wolfi-base:latest@sha256:WOLFI_DIGEST
+FROM cgr.dev/chainguard/wolfi-base:latest@sha256:31cfe087eb48bde827a6e0f607a12865f6f37d89093b95b324b9d5714e3cedab
 RUN apk add --no-cache python-3.12
 
 # 2. Pas de .pyc, sortie non bufferisée (logs en temps réel)
