@@ -1,0 +1,11 @@
+{
+  "gravite": "CRITIQUE",
+  "dag_id": "healthstream_ingestion",
+  "task_id": "verifier_broker",
+  "run_id": "manual__broker_coupe",
+  "fenetre": "2026-11-19 11:00:00+00:00",
+  "tentative": 3,
+  "erreur": "KafkaError{code=_TRANSPORT,val=-195,str=\"Failed to get metadata: Local: Broker transport failure\"}",
+  "journal": "/opt/airflow/logs/dag_id=healthstream_ingestion/run_id=manual__broker_coupe/task_id=verifier_broker/attempt=3.log",
+  "horodatage": "2026-11-19T14:08:11.097925+01:00"
+}
