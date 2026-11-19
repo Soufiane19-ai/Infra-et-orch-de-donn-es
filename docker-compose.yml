@@ -1,3 +1,38 @@
+# --- Séance 3 : bloc commun aux trois services Airflow (ancres YAML) ---
+x-airflow-commun: &airflow-commun
+  build:
+    context: ./airflow
+  image: vitals-airflow:0.1
+  environment: &airflow-env
+    # Décisions
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://hs_user:hs_password@postgres:5432/airflow
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__SCHEDULER__PARSING_PROCESSES: "1"
+    # Allègement mémoire (imposé)
+    AIRFLOW__CORE__PARALLELISM: "4"
+    AIRFLOW__SCHEDULER__MIN_FILE_PROCESS_INTERVAL: "30"
+    AIRFLOW__SCHEDULER__DAG_DIR_LIST_INTERVAL: "60"
+    AIRFLOW__WEBSERVER__WORKERS: "1"
+    AIRFLOW__WEBSERVER__SECRET_KEY: "s3-healthstream-tp"
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
+    AIRFLOW__CORE__FERNET_KEY: ""
+    # Connexion et variables versionnées (pas de clic dans l'interface)
+    AIRFLOW_CONN_HEALTHSTREAM_PG: postgresql://hs_user:hs_password@postgres:5432/healthstream
+    AIRFLOW_VAR_KAFKA_BOOTSTRAP: kafka:9092
+    AIRFLOW_VAR_VITALS_TOPIC: mimic-vitals
+    AIRFLOW_VAR_VITALS_GROUP: vitals-persister
+    AIRFLOW_VAR_FENETRE_DUREE_S: "60"
+    AIRFLOW_VAR_LAG_MAX: "200"
+  user: "${AIRFLOW_UID:-50000}:0"
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - ./logs:/opt/airflow/logs
+    - ./data:/opt/airflow/data
+    - ./producer:/opt/airflow/producer:ro
+  networks:
+    - vitals-net
+
 services:
   kafka:
     image: confluentinc/cp-kafka:7.8.0
@@ -107,6 +142,87 @@ services:
     restart: unless-stopped
     networks:
       - vitals-net
+
+  # --- Séance 3 : Airflow (LocalExecutor, sans Celery, Redis ni Flower) ---
+
+  # 1. Crée la base "airflow" dans le PostgreSQL existant, une seule fois.
+  airflow-db-init:
+    image: cgr.dev/chainguard/postgres:latest@sha256:0926ac7262a2c1963179eb939cd5d610e1be3ecca90b4b5cad8db8df16fab87e
+    container_name: vitals-airflow-db-init
+    entrypoint: ["sh", "-c"]
+    command:             # liste à UN élément : le tiret est indispensable
+      - >
+        psql -h postgres -U hs_user -d healthstream -tAc
+        "SELECT 1 FROM pg_database WHERE datname='airflow'" | grep -q 1
+        || psql -h postgres -U hs_user -d healthstream -c "CREATE DATABASE airflow OWNER hs_user"
+    environment:
+      PGPASSWORD: hs_password
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+    networks:
+      - vitals-net
+
+  # 2. Migre le schéma de métadonnées et crée le compte admin, puis s'arrête.
+  airflow-init:
+    <<: *airflow-commun
+    container_name: vitals-airflow-init
+    command:
+      - bash
+      - -c
+      - >
+        set -e;
+        airflow db migrate;
+        airflow users create --username admin --password admin
+        --firstname Ops --lastname ICU --role Admin
+        --email admin@healthstream.local || true
+    depends_on:
+      airflow-db-init:
+        condition: service_completed_successfully
+    restart: "no"
+
+  # 3. Le seul service qui exécute réellement des tâches.
+  airflow-scheduler:
+    <<: *airflow-commun
+    container_name: vitals-airflow-scheduler
+    command: scheduler
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 1536m
+    healthcheck:
+      test: ["CMD-SHELL", "airflow jobs check --job-type SchedulerJob --hostname \"$${HOSTNAME}\""]
+      interval: 30s
+      timeout: 20s
+      retries: 5
+      start_period: 45s
+
+  # 4. L'interface web.
+  airflow-webserver:
+    <<: *airflow-commun
+    container_name: vitals-airflow-web
+    command: webserver
+    ports:
+      - "8080:8080"
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
 
 volumes:
   vitals-logs:
